@@ -74,5 +74,9 @@ venv.bak/
 temp/
 tmp/
 
-NeoQuasar/
+
+NeoQuasar/*
+NeoQuasar/**/* 
+
+!NeoQuasar/**/
 !NeoQuasar/**/.gitkeep
