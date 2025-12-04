@@ -8,6 +8,20 @@ import sys
 import subprocess
 import webbrowser
 import time
+import socket
+
+
+
+def find_free_port(start_port=7070, max_attempts=10):
+    """Find a free port starting from start_port"""
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('127.0.0.1', port))
+                return port
+        except OSError:
+            continue
+    return None
 
 def check_dependencies():
     """Check if dependencies are installed"""
@@ -67,23 +81,37 @@ def main():
     os.environ['FLASK_APP'] = 'app.py'
     os.environ['FLASK_ENV'] = 'development'
     
+    # Find a free port
+    print("\n🔍 Finding available port...")
+    port = find_free_port(start_port=7070, max_attempts=20)
+
+    if port is None:
+        print("❌ No available ports found in range 7070-8100")
+        print("Please close some applications and try again")
+        return
+
+    print(f"✅ Found available port: {port}")
+
     # Start server
     try:
         from app import app
-        print("✅ Web server started successfully!")
-        print(f"🌐 Access URL: http://localhost:7070")
+        print("\n🌐 Starting Web server...")
+        print(f"✅ Web server started successfully!")
+        print(f"🌐 Access URL: http://localhost:{port}")
         print("💡 Tip: Press Ctrl+C to stop server")
-        
+
         # Auto-open browser
-        time.sleep(2)
-        webbrowser.open('http://localhost:7070')
-        
+        time.sleep(1)
+        webbrowser.open(f'http://localhost:{port}')
+
         # Start Flask application
-        app.run(debug=True, host='0.0.0.0', port=7070)
-        
+        app.run(debug=True, host='127.0.0.1', port=port, use_reloader=False)
+
     except Exception as e:
         print(f"❌ Startup failed: {e}")
-        print("Please check if port 7070 is occupied")
+        import traceback
+        traceback.print_exc()
+        print(f"\nPlease check if port {port} is accessible or try running as administrator")
 
 if __name__ == "__main__":
     main()

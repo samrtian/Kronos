@@ -4,12 +4,26 @@ import numpy as np
 import json
 import plotly.graph_objects as go
 import plotly.utils
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 from flask_cors import CORS
 import sys
 import warnings
 import datetime
+import time
+import threading
+import uuid
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
 warnings.filterwarnings('ignore')
+
+# Try to import akshare
+try:
+    import akshare as ak
+    AKSHARE_AVAILABLE = True
+except ImportError:
+    AKSHARE_AVAILABLE = False
+    print("Warning: akshare not available, stock code query will be disabled")
 
 # Add project root directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,6 +42,291 @@ CORS(app)
 tokenizer = None
 model = None
 predictor = None
+
+# Progress tracking dictionary
+progress_tracker = {}
+
+def update_progress(task_id, progress, status, message):
+    """Update progress for a task"""
+    progress_tracker[task_id] = {
+        'progress': progress,
+        'status': status,
+        'message': message,
+        'timestamp': datetime.datetime.now().isoformat()
+    }
+
+def run_prediction_async(task_id, params):
+    """Run prediction asynchronously with progress updates"""
+    try:
+        update_progress(task_id, 0, 'starting', 'Initializing prediction...')
+
+        # Extract parameters
+        file_path = params.get('file_path')
+        stock_code = params.get('stock_code')
+        lookback = params.get('lookback')
+        pred_len = params.get('pred_len')
+        temperature = params.get('temperature')
+        top_p = params.get('top_p')
+        sample_count = params.get('sample_count')
+        apply_limits = params.get('apply_limits')
+        limit_rate = params.get('limit_rate')
+        start_date = params.get('start_date')
+
+        update_progress(task_id, 10, 'loading', 'Loading data...')
+
+        # Load data
+        if stock_code:
+            df, error = load_stock_data_akshare(stock_code, lookback=lookback+pred_len+50)
+            if error:
+                update_progress(task_id, 100, 'error', error)
+                return
+            data_source = f"Stock {stock_code} (akshare)"
+        elif file_path:
+            df, error = load_data_file(file_path)
+            if error:
+                update_progress(task_id, 100, 'error', error)
+                return
+            data_source = file_path
+        else:
+            update_progress(task_id, 100, 'error', 'No data source provided')
+            return
+
+        update_progress(task_id, 20, 'preparing', 'Preparing data for prediction...')
+
+        if len(df) < lookback:
+            update_progress(task_id, 100, 'error', f'Insufficient data length, need at least {lookback} rows')
+            return
+
+        # Perform prediction
+        if MODEL_AVAILABLE and predictor is not None:
+            try:
+                required_cols = ['open', 'high', 'low', 'close']
+                if 'volume' in df.columns:
+                    required_cols.append('volume')
+
+                update_progress(task_id, 30, 'processing', 'Preparing input data...')
+
+                # Process time period selection (same logic as original predict function)
+                if stock_code:
+                    if len(df) < lookback:
+                        update_progress(task_id, 100, 'error', f'Insufficient data, need at least {lookback} data points')
+                        return
+
+                    x_df = df.iloc[-lookback:][required_cols]
+                    x_timestamp = df.iloc[-lookback:]['timestamps']
+
+                    last_timestamp = df['timestamps'].iloc[-1]
+                    time_diff = df['timestamps'].iloc[-1] - df['timestamps'].iloc[-2] if len(df) > 1 else pd.Timedelta(days=1)
+                    y_timestamp = pd.date_range(
+                        start=last_timestamp + time_diff,
+                        periods=pred_len,
+                        freq=time_diff
+                    )
+                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
+
+                    prediction_type = f"Kronos model prediction (Stock {stock_code}, latest {lookback} days)"
+
+                elif start_date:
+                    start_dt = pd.to_datetime(start_date)
+                    mask = df['timestamps'] >= start_dt
+                    time_range_df = df[mask]
+
+                    if len(time_range_df) < lookback + pred_len:
+                        update_progress(task_id, 100, 'error', f'Insufficient data from start time')
+                        return
+
+                    x_df = time_range_df.iloc[:lookback][required_cols]
+                    x_timestamp = time_range_df.iloc[:lookback]['timestamps']
+                    y_timestamp = time_range_df.iloc[lookback:lookback+pred_len]['timestamps']
+
+                    start_timestamp = time_range_df['timestamps'].iloc[0]
+                    end_timestamp = time_range_df['timestamps'].iloc[lookback+pred_len-1]
+                    time_span = end_timestamp - start_timestamp
+
+                    prediction_type = f"Kronos model prediction (within selected window)"
+                else:
+                    x_df = df.iloc[:lookback][required_cols]
+                    x_timestamp = df.iloc[:lookback]['timestamps']
+                    y_timestamp = df.iloc[lookback:lookback+pred_len]['timestamps']
+                    prediction_type = "Kronos model prediction (latest data)"
+
+                if isinstance(x_timestamp, pd.DatetimeIndex):
+                    x_timestamp = pd.Series(x_timestamp, name='timestamps')
+                if isinstance(y_timestamp, pd.DatetimeIndex):
+                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
+
+                update_progress(task_id, 40, 'predicting', f'Running prediction (sample 1/{sample_count})...')
+
+                # Run prediction with progress updates
+                pred_df = predictor.predict(
+                    df=x_df,
+                    x_timestamp=x_timestamp,
+                    y_timestamp=y_timestamp,
+                    pred_len=pred_len,
+                    T=temperature,
+                    top_p=top_p,
+                    sample_count=sample_count,
+                    verbose=False
+                )
+
+                update_progress(task_id, 70, 'processing', 'Processing prediction results...')
+
+                # Apply price limits if requested
+                if apply_limits:
+                    if stock_code:
+                        last_close = float(df.iloc[-1]['close'])
+                    elif start_date:
+                        start_dt = pd.to_datetime(start_date)
+                        mask = df['timestamps'] >= start_dt
+                        time_range_df = df[mask]
+                        last_close = float(time_range_df.iloc[lookback-1]['close'])
+                    else:
+                        last_close = float(df.iloc[lookback-1]['close'])
+
+                    pred_df = apply_price_limits(pred_df, last_close, limit_rate)
+                    prediction_type += f" (with ±{limit_rate*100:.0f}% price limits)"
+
+            except Exception as e:
+                update_progress(task_id, 100, 'error', f'Prediction failed: {str(e)}')
+                return
+        else:
+            update_progress(task_id, 100, 'error', 'Model not loaded')
+            return
+
+        update_progress(task_id, 80, 'generating', 'Generating charts and results...')
+
+        # Prepare actual data for comparison
+        actual_data = []
+        actual_df = None
+
+        if stock_code:
+            pass
+        elif start_date:
+            start_dt = pd.to_datetime(start_date)
+            mask = df['timestamps'] >= start_dt
+            time_range_df = df[mask]
+
+            if len(time_range_df) >= lookback + pred_len:
+                actual_df = time_range_df.iloc[lookback:lookback+pred_len]
+                for i, (_, row) in enumerate(actual_df.iterrows()):
+                    actual_data.append({
+                        'timestamp': row['timestamps'].isoformat(),
+                        'open': float(row['open']),
+                        'high': float(row['high']),
+                        'low': float(row['low']),
+                        'close': float(row['close']),
+                        'volume': float(row['volume']) if 'volume' in row else 0,
+                        'amount': float(row['amount']) if 'amount' in row else 0
+                    })
+        else:
+            if len(df) >= lookback + pred_len:
+                actual_df = df.iloc[lookback:lookback+pred_len]
+                for i, (_, row) in enumerate(actual_df.iterrows()):
+                    actual_data.append({
+                        'timestamp': row['timestamps'].isoformat(),
+                        'open': float(row['open']),
+                        'high': float(row['high']),
+                        'low': float(row['low']),
+                        'close': float(row['close']),
+                        'volume': float(row['volume']) if 'volume' in row else 0,
+                        'amount': float(row['amount']) if 'amount' in row else 0
+                    })
+
+        # Create chart
+        if stock_code:
+            historical_start_idx = max(0, len(df) - lookback)
+        elif start_date:
+            start_dt = pd.to_datetime(start_date)
+            mask = df['timestamps'] >= start_dt
+            historical_start_idx = df[mask].index[0] if len(df[mask]) > 0 else 0
+        else:
+            historical_start_idx = 0
+
+        chart_json = create_prediction_chart(df, pred_df, lookback, pred_len, actual_df, historical_start_idx)
+
+        # Prepare prediction results
+        if 'timestamps' in df.columns:
+            if stock_code:
+                future_timestamps = y_timestamp
+            elif start_date:
+                start_dt = pd.to_datetime(start_date)
+                mask = df['timestamps'] >= start_dt
+                time_range_df = df[mask]
+
+                if len(time_range_df) >= lookback:
+                    last_timestamp = time_range_df['timestamps'].iloc[lookback-1]
+                    time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0]
+                    future_timestamps = pd.date_range(
+                        start=last_timestamp + time_diff,
+                        periods=pred_len,
+                        freq=time_diff
+                    )
+                else:
+                    future_timestamps = []
+            else:
+                last_timestamp = df['timestamps'].iloc[-1]
+                time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0]
+                future_timestamps = pd.date_range(
+                    start=last_timestamp + time_diff,
+                    periods=pred_len,
+                    freq=time_diff
+                )
+        else:
+            future_timestamps = range(len(df), len(df) + pred_len)
+
+        prediction_results = []
+        for i, (_, row) in enumerate(pred_df.iterrows()):
+            prediction_results.append({
+                'timestamp': future_timestamps[i].isoformat() if i < len(future_timestamps) else f"T{i}",
+                'open': float(row['open']),
+                'high': float(row['high']),
+                'low': float(row['low']),
+                'close': float(row['close']),
+                'volume': float(row['volume']) if 'volume' in row else 0,
+                'amount': float(row['amount']) if 'amount' in row else 0
+            })
+
+        update_progress(task_id, 90, 'saving', 'Saving prediction results...')
+
+        # Save prediction results
+        try:
+            save_prediction_results(
+                file_path=data_source,
+                prediction_type=prediction_type,
+                prediction_results=prediction_results,
+                actual_data=actual_data,
+                input_data=x_df,
+                prediction_params={
+                    'lookback': lookback,
+                    'pred_len': pred_len,
+                    'temperature': temperature,
+                    'top_p': top_p,
+                    'sample_count': sample_count,
+                    'start_date': start_date if start_date else 'latest',
+                    'apply_price_limits': apply_limits,
+                    'limit_rate': limit_rate,
+                    'stock_code': stock_code if stock_code else None
+                }
+            )
+        except Exception as e:
+            print(f"Failed to save prediction results: {e}")
+
+        # Store final results
+        result = {
+            'success': True,
+            'prediction_type': prediction_type,
+            'chart': chart_json,
+            'prediction_results': prediction_results,
+            'actual_data': actual_data,
+            'has_comparison': len(actual_data) > 0,
+            'message': f'Prediction completed, generated {pred_len} prediction points' + (f', including {len(actual_data)} actual data points for comparison' if len(actual_data) > 0 else '')
+        }
+
+        update_progress(task_id, 100, 'completed', 'Prediction completed successfully!')
+        progress_tracker[task_id]['result'] = result
+
+    except Exception as e:
+        update_progress(task_id, 100, 'error', f'Prediction failed: {str(e)}')
 
 # Available model configurations
 AVAILABLE_MODELS = {
@@ -75,6 +374,123 @@ def load_data_files():
     
     return data_files
 
+def load_stock_data_akshare(symbol: str, lookback: int = 500) -> tuple:
+    """
+    Use akshare to download stock K-line data
+
+    Args:
+        symbol: Stock code
+        lookback: Number of historical data days needed
+
+    Returns:
+        tuple: (DataFrame, error_message)
+    """
+    if not AKSHARE_AVAILABLE:
+        return None, "akshare library not installed"
+
+    print(f"Fetching stock data for {symbol}...")
+
+    max_retries = 3
+    df = None
+
+    # Retry mechanism
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Use akshare to get A-share daily data
+            df = ak.stock_zh_a_hist(symbol=symbol, period="daily", adjust="")
+
+            if df is not None and not df.empty:
+                break
+        except Exception as e:
+            print(f"Attempt {attempt}/{max_retries} failed: {e}")
+            if attempt < max_retries:
+                time.sleep(1.5)
+
+    # Check if data was successfully retrieved
+    if df is None or df.empty:
+        return None, f"Unable to fetch data for stock {symbol}. This may be due to network connection issues, server unavailability, or an incorrect stock code. Please check your network connection and try again later."
+
+    # Rename columns to English
+    df.rename(columns={
+        "日期": "date",
+        "开盘": "open",
+        "收盘": "close",
+        "最高": "high",
+        "最低": "low",
+        "成交量": "volume",
+        "成交额": "amount"
+    }, inplace=True)
+
+    # Convert date format
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+
+    # Convert numeric columns
+    numeric_cols = ["open", "high", "low", "close", "volume", "amount"]
+    for col in numeric_cols:
+        df[col] = (
+            df[col]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .replace({"--": None, "": None})
+        )
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Fix invalid opening prices
+    open_bad = (df["open"] == 0) | (df["open"].isna())
+    if open_bad.any():
+        df.loc[open_bad, "open"] = df["close"].shift(1)
+        df["open"].fillna(df["close"], inplace=True)
+
+    # Fix missing amount
+    if df["amount"].isna().all() or (df["amount"] == 0).all():
+        df["amount"] = df["close"] * df["volume"]
+
+    # Rename date to timestamps for consistency
+    df["timestamps"] = df["date"]
+
+    # Only keep recent lookback+50 days of data (get some extra to ensure enough trading days)
+    if len(df) > lookback + 50:
+        df = df.iloc[-(lookback + 50):].reset_index(drop=True)
+
+    print(f"Data fetched successfully: {len(df)} records, date range: {df['timestamps'].min()} ~ {df['timestamps'].max()}")
+
+    return df, None
+
+
+def apply_price_limits(pred_df: pd.DataFrame, last_close: float, limit_rate: float = 0.1) -> pd.DataFrame:
+    """
+    Apply price limit constraints (Chinese A-share ±10%)
+
+    Args:
+        pred_df: Prediction results DataFrame
+        last_close: Last trading day's closing price
+        limit_rate: Price limit rate (default 0.1 for 10%)
+
+    Returns:
+        pd.DataFrame: Prediction results after applying limits
+    """
+    print(f"Applying ±{limit_rate*100:.0f}% price limits...")
+
+    pred_df = pred_df.reset_index(drop=True)
+    cols = ["open", "high", "low", "close"]
+    pred_df[cols] = pred_df[cols].astype("float64")
+
+    for i in range(len(pred_df)):
+        limit_up = last_close * (1 + limit_rate)
+        limit_down = last_close * (1 - limit_rate)
+
+        for col in cols:
+            value = pred_df.at[i, col]
+            if pd.notna(value):
+                clipped = max(min(value, limit_up), limit_down)
+                pred_df.at[i, col] = float(clipped)
+
+        last_close = float(pred_df.at[i, "close"])
+
+    return pred_df
+
+
 def load_data_file(file_path):
     """Load data file"""
     try:
@@ -84,12 +500,12 @@ def load_data_file(file_path):
             df = pd.read_feather(file_path)
         else:
             return None, "Unsupported file format"
-        
+
         # Check required columns
         required_cols = ['open', 'high', 'low', 'close']
         if not all(col in df.columns for col in required_cols):
             return None, f"Missing required columns: {required_cols}"
-        
+
         # Process timestamp column
         if 'timestamps' in df.columns:
             df['timestamps'] = pd.to_datetime(df['timestamps'])
@@ -101,24 +517,24 @@ def load_data_file(file_path):
         else:
             # If no timestamp column exists, create one
             df['timestamps'] = pd.date_range(start='2024-01-01', periods=len(df), freq='1H')
-        
+
         # Ensure numeric columns are numeric type
         for col in ['open', 'high', 'low', 'close']:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-        
+
         # Process volume column (optional)
         if 'volume' in df.columns:
             df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-        
+
         # Process amount column (optional, but not used for prediction)
         if 'amount' in df.columns:
             df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-        
+
         # Remove rows containing NaN values
         df = df.dropna()
-        
+
         return df, None
-        
+
     except Exception as e:
         return None, f"Failed to load file: {str(e)}"
 
@@ -338,16 +754,84 @@ def get_data_files():
     data_files = load_data_files()
     return jsonify(data_files)
 
+@app.route('/api/load-stock', methods=['POST'])
+def load_stock():
+    """Load stock data by stock code using akshare"""
+    try:
+        if not AKSHARE_AVAILABLE:
+            return jsonify({'error': 'akshare library not installed, please install it first'}), 400
+
+        data = request.get_json()
+        stock_code = data.get('stock_code')
+
+        if not stock_code:
+            return jsonify({'error': 'Stock code cannot be empty'}), 400
+
+        # Fetch stock data
+        df, error = load_stock_data_akshare(stock_code, lookback=500)
+        if error:
+            return jsonify({'error': error}), 400
+
+        # Detect data time frequency
+        def detect_timeframe(df):
+            if len(df) < 2:
+                return "Unknown"
+
+            time_diffs = []
+            for i in range(1, min(10, len(df))):
+                diff = df['timestamps'].iloc[i] - df['timestamps'].iloc[i-1]
+                time_diffs.append(diff)
+
+            if not time_diffs:
+                return "Unknown"
+
+            avg_diff = sum(time_diffs, pd.Timedelta(0)) / len(time_diffs)
+
+            if avg_diff < pd.Timedelta(minutes=1):
+                return f"{avg_diff.total_seconds():.0f} seconds"
+            elif avg_diff < pd.Timedelta(hours=1):
+                return f"{avg_diff.total_seconds() / 60:.0f} minutes"
+            elif avg_diff < pd.Timedelta(days=1):
+                return f"{avg_diff.total_seconds() / 3600:.0f} hours"
+            else:
+                return f"{avg_diff.days} days"
+
+        # Return data information
+        data_info = {
+            'rows': len(df),
+            'columns': list(df.columns),
+            'start_date': df['timestamps'].min().isoformat(),
+            'end_date': df['timestamps'].max().isoformat(),
+            'price_range': {
+                'min': float(df[['open', 'high', 'low', 'close']].min().min()),
+                'max': float(df[['open', 'high', 'low', 'close']].max().max())
+            },
+            'prediction_columns': ['open', 'high', 'low', 'close'] + (['volume'] if 'volume' in df.columns else []),
+            'timeframe': detect_timeframe(df),
+            'stock_code': stock_code,
+            'data_source': 'akshare'
+        }
+
+        return jsonify({
+            'success': True,
+            'data_info': data_info,
+            'message': f'Successfully loaded stock {stock_code}, total {len(df)} records'
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to load stock data: {str(e)}'}), 500
+
+
 @app.route('/api/load-data', methods=['POST'])
 def load_data():
     """Load data file"""
     try:
         data = request.get_json()
         file_path = data.get('file_path')
-        
+
         if not file_path:
             return jsonify({'error': 'File path cannot be empty'}), 400
-        
+
         df, error = load_data_file(file_path)
         if error:
             return jsonify({'error': error}), 400
@@ -403,25 +887,101 @@ def load_data():
 
 @app.route('/api/predict', methods=['POST'])
 def predict():
-    """Perform prediction"""
+    """Start prediction task"""
+    try:
+        data = request.get_json()
+
+        # Generate unique task ID
+        task_id = str(uuid.uuid4())
+
+        # Extract all parameters
+        params = {
+            'file_path': data.get('file_path'),
+            'stock_code': data.get('stock_code'),
+            'lookback': int(data.get('lookback', 400)),
+            'pred_len': int(data.get('pred_len', 120)),
+            'temperature': float(data.get('temperature', 1.0)),
+            'top_p': float(data.get('top_p', 0.9)),
+            'sample_count': int(data.get('sample_count', 1)),
+            'apply_limits': data.get('apply_price_limits', False),
+            'limit_rate': float(data.get('limit_rate', 0.1)),
+            'start_date': data.get('start_date')
+        }
+
+        # Start prediction in background thread
+        thread = threading.Thread(target=run_prediction_async, args=(task_id, params))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'message': 'Prediction task started'
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to start prediction: {str(e)}'}), 500
+
+@app.route('/api/predict-progress/<task_id>', methods=['GET'])
+def get_prediction_progress(task_id):
+    """Get prediction progress"""
+    try:
+        if task_id not in progress_tracker:
+            return jsonify({'error': 'Task not found'}), 404
+
+        progress_info = progress_tracker[task_id]
+        response = {
+            'progress': progress_info['progress'],
+            'status': progress_info['status'],
+            'message': progress_info['message'],
+            'timestamp': progress_info['timestamp']
+        }
+
+        # If task is completed, include result
+        if progress_info['status'] == 'completed' and 'result' in progress_info:
+            response['result'] = progress_info['result']
+
+        return jsonify(response)
+
+    except Exception as e:
+        return jsonify({'error': f'Failed to get progress: {str(e)}'}), 500
+
+@app.route('/api/predict-legacy', methods=['POST'])
+def predict_legacy():
+    """Perform prediction (legacy synchronous endpoint)"""
     try:
         data = request.get_json()
         file_path = data.get('file_path')
+        stock_code = data.get('stock_code')  # New: support stock code
         lookback = int(data.get('lookback', 400))
         pred_len = int(data.get('pred_len', 120))
-        
+
         # Get prediction quality parameters
         temperature = float(data.get('temperature', 1.0))
         top_p = float(data.get('top_p', 0.9))
         sample_count = int(data.get('sample_count', 1))
-        
-        if not file_path:
-            return jsonify({'error': 'File path cannot be empty'}), 400
-        
-        # Load data
-        df, error = load_data_file(file_path)
-        if error:
-            return jsonify({'error': error}), 400
+
+        # Get price limit parameter (new)
+        apply_limits = data.get('apply_price_limits', False)
+        limit_rate = float(data.get('limit_rate', 0.1))
+
+        # Load data - support both file path and stock code
+        if stock_code:
+            # Use akshare to fetch stock data
+            if not AKSHARE_AVAILABLE:
+                return jsonify({'error': 'akshare library not installed'}), 400
+            df, error = load_stock_data_akshare(stock_code, lookback=lookback+pred_len+50)
+            if error:
+                return jsonify({'error': error}), 400
+            data_source = f"Stock {stock_code} (akshare)"
+        elif file_path:
+            # Load from file
+            df, error = load_data_file(file_path)
+            if error:
+                return jsonify({'error': error}), 400
+            data_source = file_path
+        else:
+            return jsonify({'error': 'Either file_path or stock_code must be provided'}), 400
         
         if len(df) < lookback:
             return jsonify({'error': f'Insufficient data length, need at least {lookback} rows'}), 400
@@ -437,34 +997,56 @@ def predict():
                 
                 # Process time period selection
                 start_date = data.get('start_date')
-                
-                if start_date:
-                    # Custom time period - fix logic: use data within selected window
+
+                # For stock code mode, always use latest data (ignore time window)
+                if stock_code:
+                    # Stock code mode: use latest available data
+                    if len(df) < lookback:
+                        return jsonify({'error': f'Insufficient data, need at least {lookback} data points, currently only {len(df)} available'}), 400
+
+                    # Use the most recent lookback data points
+                    x_df = df.iloc[-lookback:][required_cols]
+                    x_timestamp = df.iloc[-lookback:]['timestamps']
+
+                    # Generate future timestamps for prediction
+                    last_timestamp = df['timestamps'].iloc[-1]
+                    time_diff = df['timestamps'].iloc[-1] - df['timestamps'].iloc[-2] if len(df) > 1 else pd.Timedelta(days=1)
+                    y_timestamp = pd.date_range(
+                        start=last_timestamp + time_diff,
+                        periods=pred_len,
+                        freq=time_diff
+                    )
+                    y_timestamp = pd.Series(y_timestamp, name='timestamps')
+
+                    prediction_type = f"Kronos model prediction (Stock {stock_code}, latest {lookback} days)"
+
+                elif start_date:
+                    # File mode with custom time period
                     start_dt = pd.to_datetime(start_date)
-                    
+
                     # Find data after start time
                     mask = df['timestamps'] >= start_dt
                     time_range_df = df[mask]
-                    
+
                     # Ensure sufficient data: lookback + pred_len
                     if len(time_range_df) < lookback + pred_len:
                         return jsonify({'error': f'Insufficient data from start time {start_dt.strftime("%Y-%m-%d %H:%M")}, need at least {lookback + pred_len} data points, currently only {len(time_range_df)} available'}), 400
-                    
+
                     # Use first lookback data points within selected window for prediction
                     x_df = time_range_df.iloc[:lookback][required_cols]
                     x_timestamp = time_range_df.iloc[:lookback]['timestamps']
-                    
+
                     # Use last pred_len data points within selected window as actual values
                     y_timestamp = time_range_df.iloc[lookback:lookback+pred_len]['timestamps']
-                    
+
                     # Calculate actual time period length
                     start_timestamp = time_range_df['timestamps'].iloc[0]
                     end_timestamp = time_range_df['timestamps'].iloc[lookback+pred_len-1]
                     time_span = end_timestamp - start_timestamp
-                    
+
                     prediction_type = f"Kronos model prediction (within selected window: first {lookback} data points for prediction, last {pred_len} data points for comparison, time span: {time_span})"
                 else:
-                    # Use latest data
+                    # File mode: use latest data
                     x_df = df.iloc[:lookback][required_cols]
                     x_timestamp = df.iloc[:lookback]['timestamps']
                     y_timestamp = df.iloc[lookback:lookback+pred_len]['timestamps']
@@ -476,6 +1058,7 @@ def predict():
                 if isinstance(y_timestamp, pd.DatetimeIndex):
                     y_timestamp = pd.Series(y_timestamp, name='timestamps')
                 
+                # Set verbose=False to disable console progress bar
                 pred_df = predictor.predict(
                     df=x_df,
                     x_timestamp=x_timestamp,
@@ -483,9 +1066,28 @@ def predict():
                     pred_len=pred_len,
                     T=temperature,
                     top_p=top_p,
-                    sample_count=sample_count
+                    sample_count=sample_count,
+                    verbose=False  # Disable console progress bar
                 )
-                
+
+                # Apply price limits if requested
+                if apply_limits:
+                    if stock_code:
+                        # Stock code mode: use last close from latest data
+                        last_close = float(df.iloc[-1]['close'])
+                    elif start_date:
+                        # File mode with custom time period
+                        start_dt = pd.to_datetime(start_date)
+                        mask = df['timestamps'] >= start_dt
+                        time_range_df = df[mask]
+                        last_close = float(time_range_df.iloc[lookback-1]['close'])
+                    else:
+                        # File mode: latest data
+                        last_close = float(df.iloc[lookback-1]['close'])
+
+                    pred_df = apply_price_limits(pred_df, last_close, limit_rate)
+                    prediction_type += f" (with ±{limit_rate*100:.0f}% price limits)"
+
             except Exception as e:
                 return jsonify({'error': f'Kronos model prediction failed: {str(e)}'}), 500
         else:
@@ -494,21 +1096,26 @@ def predict():
         # Prepare actual data for comparison (if exists)
         actual_data = []
         actual_df = None
-        
-        if start_date:  # Custom time period
+
+        # Stock code mode: no actual data (we're predicting future)
+        if stock_code:
+            # No actual data for future predictions
+            pass
+
+        elif start_date:  # File mode with custom time period
             # Fix logic: use data within selected window
             # Prediction uses first 400 data points within selected window
             # Actual data should be last 120 data points within selected window
             start_dt = pd.to_datetime(start_date)
-            
+
             # Find data starting from start_date
             mask = df['timestamps'] >= start_dt
             time_range_df = df[mask]
-            
+
             if len(time_range_df) >= lookback + pred_len:
                 # Get last 120 data points within selected window as actual values
                 actual_df = time_range_df.iloc[lookback:lookback+pred_len]
-                
+
                 for i, (_, row) in enumerate(actual_df.iterrows()):
                     actual_data.append({
                         'timestamp': row['timestamps'].isoformat(),
@@ -519,7 +1126,7 @@ def predict():
                         'volume': float(row['volume']) if 'volume' in row else 0,
                         'amount': float(row['amount']) if 'amount' in row else 0
                     })
-        else:  # Latest data
+        else:  # File mode: latest data
             # Prediction uses first 400 data points
             # Actual data should be 120 data points after first 400 data points
             if len(df) >= lookback + pred_len:
@@ -536,25 +1143,31 @@ def predict():
                     })
         
         # Create chart - pass historical data start position
-        if start_date:
-            # Custom time period: find starting position of historical data in original df
+        if stock_code:
+            # Stock code mode: use the last lookback points
+            historical_start_idx = max(0, len(df) - lookback)
+        elif start_date:
+            # File mode with custom time period: find starting position of historical data in original df
             start_dt = pd.to_datetime(start_date)
             mask = df['timestamps'] >= start_dt
             historical_start_idx = df[mask].index[0] if len(df[mask]) > 0 else 0
         else:
-            # Latest data: start from beginning
+            # File mode: latest data, start from beginning
             historical_start_idx = 0
-        
+
         chart_json = create_prediction_chart(df, pred_df, lookback, pred_len, actual_df, historical_start_idx)
         
         # Prepare prediction result data - fix timestamp calculation logic
         if 'timestamps' in df.columns:
-            if start_date:
-                # Custom time period: use selected window data to calculate timestamps
+            if stock_code:
+                # Stock code mode: y_timestamp already calculated above
+                future_timestamps = y_timestamp
+            elif start_date:
+                # File mode with custom time period: use selected window data to calculate timestamps
                 start_dt = pd.to_datetime(start_date)
                 mask = df['timestamps'] >= start_dt
                 time_range_df = df[mask]
-                
+
                 if len(time_range_df) >= lookback:
                     # Calculate prediction timestamps starting from last time point of selected window
                     last_timestamp = time_range_df['timestamps'].iloc[lookback-1]
@@ -567,7 +1180,7 @@ def predict():
                 else:
                     future_timestamps = []
             else:
-                # Latest data: calculate from last time point of entire data file
+                # File mode: latest data, calculate from last time point of entire data file
                 last_timestamp = df['timestamps'].iloc[-1]
                 time_diff = df['timestamps'].iloc[1] - df['timestamps'].iloc[0]
                 future_timestamps = pd.date_range(
@@ -593,7 +1206,7 @@ def predict():
         # Save prediction results to file
         try:
             save_prediction_results(
-                file_path=file_path,
+                file_path=data_source,
                 prediction_type=prediction_type,
                 prediction_results=prediction_results,
                 actual_data=actual_data,
@@ -604,7 +1217,10 @@ def predict():
                     'temperature': temperature,
                     'top_p': top_p,
                     'sample_count': sample_count,
-                    'start_date': start_date if start_date else 'latest'
+                    'start_date': start_date if start_date else 'latest',
+                    'apply_price_limits': apply_limits,
+                    'limit_rate': limit_rate,
+                    'stock_code': stock_code if stock_code else None
                 }
             )
         except Exception as e:
@@ -697,6 +1313,77 @@ def get_model_status():
             'message': 'Kronos model library not available, please install related dependencies'
         })
 
+
+@app.route('/api/akshare-status')
+def get_akshare_status():
+    """Get akshare availability status"""
+    return jsonify({
+        'available': AKSHARE_AVAILABLE,
+        'message': 'akshare available, stock code query enabled' if AKSHARE_AVAILABLE else 'akshare not installed, please install it to enable stock code query'
+    })
+
+@app.route('/api/prediction-history/<stock_code>', methods=['GET'])
+def get_prediction_history(stock_code):
+    """Get prediction history for a specific stock"""
+    try:
+        results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prediction_results')
+        prediction_files = []
+        
+        if os.path.exists(results_dir):
+            for filename in os.listdir(results_dir):
+                if filename.endswith('.json'):
+                    filepath = os.path.join(results_dir, filename)
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        
+                        # Check if this prediction is for the requested stock
+                        if data.get('prediction_params', {}).get('stock_code') == stock_code:
+                            # Extract timestamp from filename: prediction_20250826_163800.json
+                            timestamp_str = filename.split('_')[1] + '_' + filename.split('_')[2].split('.')[0]
+                            prediction_files.append({
+                                'filename': filename,
+                                'timestamp': timestamp_str,
+                                'date': datetime.datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S').strftime('%Y-%m-%d %H:%M:%S'),
+                                'file_path': filepath
+                            })
+                    except Exception as e:
+                        print(f"Failed to read prediction file {filename}: {e}")
+        
+        # Sort by timestamp in descending order (newest first)
+        prediction_files.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        return jsonify({
+            'success': True,
+            'stock_code': stock_code,
+            'predictions': prediction_files,
+            'count': len(prediction_files)
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to get prediction history: {str(e)}'}), 500
+
+@app.route('/api/prediction-detail/<filename>', methods=['GET'])
+def get_prediction_detail(filename):
+    """Get detailed prediction data for a specific prediction file"""
+    try:
+        results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prediction_results')
+        filepath = os.path.join(results_dir, filename)
+        
+        if not os.path.exists(filepath):
+            return jsonify({'error': 'Prediction file not found'}), 404
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        return jsonify({
+            'success': True,
+            'prediction': data
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to get prediction detail: {str(e)}'}), 500
+
 if __name__ == '__main__':
     print("Starting Kronos Web UI...")
     print(f"Model availability: {MODEL_AVAILABLE}")
@@ -704,5 +1391,5 @@ if __name__ == '__main__':
         print("Tip: You can load Kronos model through /api/load-model endpoint")
     else:
         print("Tip: Will use simulated data for demonstration")
-    
-    app.run(debug=True, host='0.0.0.0', port=7070)
+
+    app.run(debug=True, host='0.0.0.0', port=5000)

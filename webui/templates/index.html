@@ -189,6 +189,7 @@
             border-radius: 15px;
             padding: 25px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: auto;
         }
 
         .chart-container h2 {
@@ -343,6 +344,105 @@
             font-weight: 600;
         }
 
+        /* Prediction table styles */
+        .prediction-table-section {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .prediction-table-section h3 {
+            color: #4a5568;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+        }
+
+        .table-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 14px;
+            width: auto;
+        }
+
+        .prediction-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .prediction-table th,
+        .prediction-table td {
+            border: 1px solid #e2e8f0;
+            padding: 10px;
+            text-align: center;
+            font-size: 13px;
+        }
+
+        .prediction-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        /* Prediction date button styles */
+        .prediction-date-btn {
+            padding: 8px 16px;
+            border: 1px solid #667eea;
+            border-radius: 20px;
+            background: white;
+            color: #667eea;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+        
+        .prediction-date-btn:hover {
+            background: #667eea;
+            color: white;
+            transform: translateY(-2px);
+        }
+        
+        .prediction-date-btn.active {
+            background: #667eea;
+            color: white;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        .prediction-table tbody tr:nth-child(even) {
+            background: #f9fafb;
+        }
+
+        .prediction-table tbody tr:hover {
+            background: #e6f7ff;
+        }
+
+        .prediction-table .positive {
+            color: #22c55e;
+            font-weight: 600;
+        }
+
+        .prediction-table .negative {
+            color: #ef4444;
+            font-weight: 600;
+        }
+
+        .prediction-table .neutral {
+            color: #6b7280;
+        }
+
         .error-stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -377,7 +477,6 @@
 
         .loading {
             display: none;
-            text-align: center;
             padding: 20px;
         }
 
@@ -385,19 +484,60 @@
             display: block;
         }
 
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
+        .progress-container {
+            margin: 0 auto;
+            width: 100%;
+            max-width: 400px;
         }
 
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 10px;
+            position: relative;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            border-radius: 6px;
+            position: absolute;
+            left: 0;
+            top: 0;
+            transition: width 0.3s ease;
+        }
+
+        .progress-fill.indeterminate {
+            animation: progress-animation 2s ease-in-out infinite;
+        }
+
+        @keyframes progress-animation {
+            0% {
+                width: 0%;
+            }
+            100% {
+                width: 100%;
+            }
+        }
+
+        .progress-text {
+            text-align: center;
+            font-size: 14px;
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        .progress-percentage {
+            text-align: center;
+            font-size: 18px;
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 5px;
         }
 
         .model-info {
@@ -481,13 +621,35 @@
 
                 <hr style="margin: 20px 0; border: 1px solid #e2e8f0;">
 
-                <!-- Data File Selection -->
+                <!-- Data Source Selection -->
                 <div class="form-group">
+                    <label>Data Source:</label>
+                    <select id="data-source-select">
+                        <option value="file">CSV File</option>
+                        <option value="stock">Stock Code (akshare)</option>
+                    </select>
+                    <small class="form-text">Choose to load from file or fetch by stock code</small>
+                </div>
+
+                <!-- Data File Selection (for file mode) -->
+                <div id="file-input-container" class="form-group">
                     <label for="data-file-select">Select Data File:</label>
                     <select id="data-file-select">
                         <option value="">Please load data file list first</option>
                     </select>
                     <small class="form-text">Select K-line data file from data directory</small>
+                </div>
+
+                <!-- Stock Code Input (for stock mode) -->
+                <div id="stock-input-container" class="form-group" style="display: none;">
+                    <label for="stock-code-input">Stock Code:</label>
+                    <input type="text" id="stock-code-input" placeholder="e.g., 000001, 600000, 002456" maxlength="6">
+                    <small class="form-text">Enter Chinese A-share stock code (6 digits). Loading may take 10-30 seconds. If connection fails, please try again.</small>
+                </div>
+
+                <!-- akshare Status -->
+                <div id="akshare-status" class="status info" style="display: none;">
+                    akshare status information
                 </div>
 
                 <button id="load-data-btn" class="btn btn-secondary">
@@ -565,21 +727,81 @@
                     <small class="form-text">Generate multiple prediction samples to improve quality (recommended 1-3)</small>
                 </div>
 
+                <!-- Price Limit Options -->
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="apply-price-limits" style="width: auto; margin-right: 10px;">
+                        Apply Price Limits
+                    </label>
+                    <small class="form-text">Apply daily price limit constraints (for Chinese A-shares)</small>
+                </div>
+
+                <div class="form-group" id="limit-rate-container" style="display: none;">
+                    <label for="limit-rate">Price Limit Rate (%):</label>
+                    <input type="number" id="limit-rate" value="10" min="1" max="20" step="1">
+                    <small class="form-text">Default 10% for A-shares, can adjust for other markets</small>
+                </div>
+
                 <button id="predict-btn" class="btn btn-success" disabled>
                     🔮 Start Prediction
                 </button>
 
                 <!-- Loading Status -->
                 <div id="loading" class="loading">
-                    <div class="spinner"></div>
-                    <p>Processing, please wait...</p>
+                    <div class="progress-container">
+                        <div class="progress-percentage" id="progress-percentage">0%</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-fill"></div>
+                        </div>
+                        <div class="progress-text" id="progress-text">Processing, please wait...</div>
+                    </div>
                 </div>
             </div>
 
             <div class="chart-container">
                 <h2>📈 Prediction Results Chart</h2>
                 <div id="chart"></div>
-                
+
+                <!-- Prediction Data Table -->
+                <div id="prediction-table-section" class="prediction-table-section" style="display: none;">
+                    <h3>📋 Prediction Data Details</h3>
+                    
+                    <!-- Prediction Date Selection Bar -->
+                    <div id="prediction-date-bar" class="prediction-date-bar" style="margin-bottom: 15px; display: none;">
+                        <h4 style="margin-bottom: 10px; color: #4a5568;">🔄 Select Prediction Date</h4>
+                        <div style="display: flex; gap: 10px; overflow-x: auto; padding: 10px 0; border-bottom: 1px solid #e2e8f0;">
+                            <div id="prediction-dates-container" style="display: flex; gap: 8px;"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="table-controls">
+                        <button id="export-csv-btn" class="btn btn-secondary btn-sm">
+                            💾 Export to CSV
+                        </button>
+                        <button id="export-excel-btn" class="btn btn-secondary btn-sm">
+                            📊 Export to Excel
+                        </button>
+                    </div>
+                    <div style="max-height: 500px; overflow-y: auto; margin-top: 15px;">
+                        <table class="prediction-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Date</th>
+                                    <th>Open (开盘)</th>
+                                    <th>High (最高)</th>
+                                    <th>Low (最低)</th>
+                                    <th>Close (收盘)</th>
+                                    <th>Volume (成交量)</th>
+                                    <th>Change (%)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="prediction-table-body">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- Comparison Analysis -->
                 <div id="comparison-section" class="comparison-section" style="display: none;">
                     <h3>📊 Prediction vs Actual Data Comparison</h3>
@@ -636,9 +858,13 @@
     <script>
         // Global variables
         let currentDataFile = null;
+        let currentStockCode = null;
         let currentDataInfo = null;
         let availableModels = [];
         let modelLoaded = false;
+        let akshareAvailable = false;
+        let predictionHistory = []; // Stores prediction history for current stock
+        let currentPredictionFilename = null; // Stores current prediction filename
 
         // Initialize after page loads
         document.addEventListener('DOMContentLoaded', function() {
@@ -648,20 +874,51 @@
         // Initialize application
         async function initializeApp() {
             console.log('🚀 Initializing Kronos Web UI...');
-            
+
             // Load available models
             await loadAvailableModels();
-            
+
+            // Check akshare availability
+            await checkAkshareStatus();
+
             // Load data file list
             await loadDataFiles();
-            
+
             // Set up event listeners
             setupEventListeners();
-            
+
             // Initialize time slider
             initializeTimeSlider();
-            
+
             console.log('✅ Application initialization completed');
+        }
+
+        // Check akshare availability
+        async function checkAkshareStatus() {
+            try {
+                const response = await axios.get('/api/akshare-status');
+                akshareAvailable = response.data.available;
+
+                const statusDiv = document.getElementById('akshare-status');
+                if (akshareAvailable) {
+                    statusDiv.className = 'status success';
+                    statusDiv.textContent = '✅ ' + response.data.message;
+                    console.log('✅ akshare available');
+                } else {
+                    statusDiv.className = 'status warning';
+                    statusDiv.textContent = '⚠️ ' + response.data.message;
+                    // Disable stock code option if akshare not available
+                    const stockOption = document.querySelector('#data-source-select option[value="stock"]');
+                    if (stockOption) {
+                        stockOption.disabled = true;
+                        stockOption.textContent += ' (Not Available)';
+                    }
+                    console.warn('⚠️ akshare not available');
+                }
+                statusDiv.style.display = 'block';
+            } catch (error) {
+                console.error('❌ Failed to check akshare status:', error);
+            }
         }
 
         // Load available models
@@ -773,34 +1030,46 @@
             }
         }
 
-        // Load data file
+        // Load data file or stock
         async function loadData() {
+            const dataSource = document.getElementById('data-source-select').value;
+
+            if (dataSource === 'file') {
+                await loadDataFromFile();
+            } else if (dataSource === 'stock') {
+                await loadDataFromStock();
+            }
+        }
+
+        // Load data from file
+        async function loadDataFromFile() {
             const filePath = document.getElementById('data-file-select').value;
-            
+
             if (!filePath) {
                 showStatus('error', 'Please select a data file to load');
                 return;
             }
-            
+
             try {
                 showLoading(true);
                 document.getElementById('load-data-btn').disabled = true;
-                
+
                 const response = await axios.post('/api/load-data', {
                     file_path: filePath
                 });
-                
+
                 if (response.data.success) {
                     currentDataFile = filePath;
+                    currentStockCode = null;
                     currentDataInfo = response.data.data_info;
                     showDataInfo(response.data.data_info);
                     showStatus('success', response.data.message);
-                    
+
                     // Update prediction button status
                     if (modelLoaded) {
                         document.getElementById('predict-btn').disabled = false;
                     }
-                    
+
                     console.log('✅ Data loaded successfully:', response.data.data_info);
                 } else {
                     showStatus('error', response.data.error);
@@ -814,16 +1083,89 @@
             }
         }
 
+        // Load data from stock code
+        async function loadDataFromStock() {
+            const stockCode = document.getElementById('stock-code-input').value.trim();
+
+            if (!stockCode) {
+                showStatus('error', 'Please enter a stock code');
+                return;
+            }
+
+            // Validate stock code format (6 digits)
+            if (!/^\d{6}$/.test(stockCode)) {
+                showStatus('error', 'Invalid stock code format. Please enter a 6-digit code (e.g., 000001, 600000, 002456)');
+                return;
+            }
+
+            try {
+                showLoading(true);
+                document.getElementById('load-data-btn').disabled = true;
+
+                // Update progress after showing loading (to ensure elements exist)
+                setTimeout(() => {
+                    updateProgress(0, `Fetching stock data for ${stockCode}... This may take 10-30 seconds`);
+                }, 100);
+
+                const response = await axios.post('/api/load-stock', {
+                    stock_code: stockCode
+                });
+
+                if (response.data.success) {
+                    currentStockCode = stockCode;
+                    currentDataFile = null;
+                    currentDataInfo = response.data.data_info;
+                    showDataInfo(response.data.data_info);
+                    showStatus('success', response.data.message);
+
+                    // Update prediction button status
+                    if (modelLoaded) {
+                        document.getElementById('predict-btn').disabled = false;
+                    }
+
+                    console.log('✅ Stock data loaded successfully:', response.data.data_info);
+                } else {
+                    showStatus('error', response.data.error);
+                }
+            } catch (error) {
+                console.error('❌ Stock data loading failed:', error);
+                let errorMessage = 'Stock data loading failed: ';
+
+                if (error.response?.data?.error) {
+                    errorMessage += error.response.data.error;
+                } else if (error.message) {
+                    errorMessage += error.message;
+                } else {
+                    errorMessage += 'Unknown error occurred';
+                }
+
+                showStatus('error', errorMessage);
+            } finally {
+                showLoading(false);
+                document.getElementById('load-data-btn').disabled = false;
+            }
+        }
+
         // Display data information
         function showDataInfo(dataInfo) {
             document.getElementById('data-info').style.display = 'block';
-            document.getElementById('data-rows').textContent = dataInfo.rows;
+
+            // Add stock code info if available
+            let rowsText = dataInfo.rows;
+            if (dataInfo.stock_code) {
+                rowsText += ` (Stock: ${dataInfo.stock_code})`;
+            }
+            if (dataInfo.data_source) {
+                rowsText += ` [${dataInfo.data_source}]`;
+            }
+
+            document.getElementById('data-rows').textContent = rowsText;
             document.getElementById('data-cols').textContent = dataInfo.columns.length;
             document.getElementById('data-time-range').textContent = `${dataInfo.start_date} to ${dataInfo.end_date}`;
             document.getElementById('data-price-range').textContent = `${dataInfo.price_range.min.toFixed(4)} - ${dataInfo.price_range.max.toFixed(4)}`;
             document.getElementById('data-timeframe').textContent = dataInfo.timeframe;
             document.getElementById('data-prediction-cols').textContent = dataInfo.prediction_columns.join(', ');
-            
+
             // Initialize time window slider
             initializeTimeWindowSlider(dataInfo);
         }
@@ -1028,86 +1370,478 @@
             updateSliderFromInputs();
         }
 
-        // Start prediction
+        // Start prediction with real-time progress
         async function startPrediction() {
-            if (!currentDataFile) {
-                showStatus('error', 'Please load data file first');
+            if (!currentDataFile && !currentStockCode) {
+                showStatus('error', 'Please load data file or stock code first');
                 return;
             }
-            
+
             if (!modelLoaded) {
                 showStatus('error', 'Please load model first');
                 return;
             }
-            
+
             try {
                 showLoading(true);
                 document.getElementById('predict-btn').disabled = true;
-                
+
+                // Update progress after showing loading (to ensure elements exist)
+                setTimeout(() => {
+                    updateProgress(0, 'Initializing prediction...');
+                }, 100);
+
                 const lookback = parseInt(document.getElementById('lookback').value);
                 const predLen = parseInt(document.getElementById('pred-len').value);
-                
+
                 // Get selected time range from time window slider
                 const startHandle = document.getElementById('start-handle');
                 const startPercentage = parseFloat(startHandle.style.left) / 100;
-                
+
                 if (!sliderData) {
                     showStatus('error', 'Time window slider not initialized');
                     return;
                 }
-                
+
                 // Calculate selected time range
                 const totalTime = sliderData.endDate.getTime() - sliderData.startDate.getTime();
                 const startTime = sliderData.startDate.getTime() + (totalTime * startPercentage);
                 const startDate = new Date(startTime);
-                
+
                 // Get prediction quality parameters
                 const temperature = parseFloat(document.getElementById('temperature').value);
                 const topP = parseFloat(document.getElementById('top-p').value);
                 const sampleCount = parseInt(document.getElementById('sample-count').value);
-                
+
+                // Get price limit parameters
+                const applyPriceLimits = document.getElementById('apply-price-limits').checked;
+                const limitRate = parseFloat(document.getElementById('limit-rate').value) / 100; // Convert to decimal
+
                 let predictionParams = {
-                    file_path: currentDataFile,
                     lookback: lookback,
                     pred_len: predLen,
                     start_date: startDate.toISOString().slice(0, 16), // Format as YYYY-MM-DDTHH:MM
                     temperature: temperature,
                     top_p: topP,
-                    sample_count: sampleCount
+                    sample_count: sampleCount,
+                    apply_price_limits: applyPriceLimits,
+                    limit_rate: limitRate
                 };
-                
+
+                // Add either file_path or stock_code
+                if (currentStockCode) {
+                    predictionParams.stock_code = currentStockCode;
+                } else {
+                    predictionParams.file_path = currentDataFile;
+                }
+
                 console.log('🚀 Starting prediction, parameters:', predictionParams);
-                
+
+                // Start prediction task
                 const response = await axios.post('/api/predict', predictionParams);
-                
+
                 if (response.data.success) {
-                    // Display prediction results
-                    displayPredictionResult(response.data);
-                    showStatus('success', response.data.message);
+                    const taskId = response.data.task_id;
+                    console.log('✅ Prediction task started, task ID:', taskId);
+
+                    // Poll for progress updates
+                    pollPredictionProgress(taskId);
                 } else {
                     showStatus('error', response.data.error);
+                    showLoading(false);
+                    document.getElementById('predict-btn').disabled = false;
                 }
             } catch (error) {
                 console.error('❌ Prediction failed:', error);
                 showStatus('error', `Prediction failed: ${error.response?.data?.error || error.message}`);
-            } finally {
                 showLoading(false);
                 document.getElementById('predict-btn').disabled = false;
             }
         }
 
+        // Poll for prediction progress
+        function pollPredictionProgress(taskId) {
+            const pollInterval = setInterval(async () => {
+                try {
+                    const response = await axios.get(`/api/predict-progress/${taskId}`);
+                    const data = response.data;
+
+                    // Update progress UI
+                    updateProgress(data.progress, data.message);
+
+                    console.log(`Progress: ${data.progress}% - ${data.status} - ${data.message}`);
+
+                    // Check if task is completed
+                    if (data.status === 'completed') {
+                        clearInterval(pollInterval);
+
+                        // Display results
+                        if (data.result) {
+                            displayPredictionResult(data.result);
+                            showStatus('success', data.result.message);
+                        }
+
+                        showLoading(false);
+                        document.getElementById('predict-btn').disabled = false;
+                    } else if (data.status === 'error') {
+                        clearInterval(pollInterval);
+                        showStatus('error', data.message);
+                        showLoading(false);
+                        document.getElementById('predict-btn').disabled = false;
+                    }
+
+                } catch (error) {
+                    console.error('❌ Failed to get progress:', error);
+                    clearInterval(pollInterval);
+                    showStatus('error', 'Failed to get prediction progress');
+                    showLoading(false);
+                    document.getElementById('predict-btn').disabled = false;
+                }
+            }, 500); // Poll every 500ms
+        }
+
+        // Update progress bar
+        function updateProgress(percentage, message) {
+            const progressFill = document.getElementById('progress-fill');
+            const progressText = document.getElementById('progress-text');
+            const progressPercentage = document.getElementById('progress-percentage');
+
+            // Safety check - elements might not exist yet
+            if (!progressFill || !progressText || !progressPercentage) {
+                console.warn('Progress elements not found');
+                return;
+            }
+
+            // Update progress bar width
+            progressFill.style.width = percentage + '%';
+
+            // Remove indeterminate animation if progress is known
+            if (percentage > 0) {
+                progressFill.classList.remove('indeterminate');
+            } else {
+                progressFill.classList.add('indeterminate');
+            }
+
+            // Update text
+            progressPercentage.textContent = Math.round(percentage) + '%';
+            progressText.textContent = message || 'Processing, please wait...';
+        }
+
         // Display prediction results
-        function displayPredictionResult(result) {
+        async function displayPredictionResult(result) {
             // Display chart
             const chartData = JSON.parse(result.chart);
             Plotly.newPlot('chart', chartData.data, chartData.layout);
-            
+
+            // Display prediction data table
+            displayPredictionTable(result.prediction_results);
+
             // Display comparison analysis (if actual data exists)
             if (result.has_comparison) {
                 displayComparisonAnalysis(result);
             } else {
                 document.getElementById('comparison-section').style.display = 'none';
             }
+
+            // Scroll to top smoothly after displaying results
+            window.scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+            
+            // Load prediction history for the current stock (if applicable)
+            if (currentStockCode) {
+                await loadPredictionHistory(currentStockCode);
+            }
+        }
+        
+        // Load prediction history for a specific stock
+        async function loadPredictionHistory(stockCode) {
+            try {
+                const response = await axios.get(`/api/prediction-history/${stockCode}`);
+                if (response.data.success) {
+                    predictionHistory = response.data.predictions;
+                    updatePredictionDateBar();
+                }
+            } catch (error) {
+                console.error('❌ Failed to load prediction history:', error);
+            }
+        }
+        
+        // Update prediction date bar
+        function updatePredictionDateBar() {
+            const dateBar = document.getElementById('prediction-date-bar');
+            const datesContainer = document.getElementById('prediction-dates-container');
+            
+            if (predictionHistory.length === 0) {
+                dateBar.style.display = 'none';
+                return;
+            }
+            
+            dateBar.style.display = 'block';
+            datesContainer.innerHTML = '';
+            
+            // Add "Current Prediction" button first
+            const currentBtn = document.createElement('button');
+            currentBtn.className = 'prediction-date-btn active';
+            currentBtn.textContent = 'Current Prediction';
+            currentBtn.addEventListener('click', () => {
+                // Reload the current prediction (re-display what we just got)
+                loadCurrentPrediction();
+            });
+            datesContainer.appendChild(currentBtn);
+            
+            // Add buttons for each historical prediction
+            predictionHistory.forEach(prediction => {
+                const btn = document.createElement('button');
+                btn.className = 'prediction-date-btn';
+                btn.textContent = prediction.date;
+                btn.dataset.filename = prediction.filename;
+                btn.addEventListener('click', () => {
+                    loadPredictionDetail(prediction.filename);
+                });
+                datesContainer.appendChild(btn);
+            });
+        }
+        
+        // Load current prediction (just re-display what we have)
+        function loadCurrentPrediction() {
+            // Update active button
+            document.querySelectorAll('.prediction-date-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector('.prediction-date-btn').classList.add('active');
+            
+            // Clear current prediction filename
+            currentPredictionFilename = null;
+            
+            // Re-display the current prediction table
+            if (currentPredictionData) {
+                displayPredictionTable(currentPredictionData);
+            }
+        }
+        
+        // Load prediction detail for a specific prediction file
+        async function loadPredictionDetail(filename) {
+            try {
+                showLoading(true);
+                
+                const response = await axios.get(`/api/prediction-detail/${filename}`);
+                if (response.data.success) {
+                    const prediction = response.data.prediction;
+                    
+                    // Update active button
+                    document.querySelectorAll('.prediction-date-btn').forEach(btn => {
+                        btn.classList.remove('active');
+                        if (btn.dataset.filename === filename) {
+                            btn.classList.add('active');
+                        }
+                    });
+                    
+                    // Update current prediction filename
+                    currentPredictionFilename = filename;
+                    
+                    // Display the prediction data
+                    displayPredictionTable(prediction.prediction_results);
+                    
+                    // Recreate the chart with this prediction data
+                    // Note: We don't have the original historical data here, so we'll just show the prediction chart
+                    const pred_df = prediction.prediction_results;
+                    const chart = createSimplePredictionChart(pred_df);
+                    Plotly.newPlot('chart', chart.data, chart.layout);
+                }
+            } catch (error) {
+                console.error('❌ Failed to load prediction detail:', error);
+                showStatus('error', `Failed to load prediction detail: ${error.response?.data?.error || error.message}`);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // Create a simple prediction chart from prediction data
+        function createSimplePredictionChart(pred_df) {
+            // Convert prediction data to Plotly chart format
+            const dates = pred_df.map(pred => new Date(pred.timestamp));
+            const open = pred_df.map(pred => pred.open);
+            const high = pred_df.map(pred => pred.high);
+            const low = pred_df.map(pred => pred.low);
+            const close = pred_df.map(pred => pred.close);
+            
+            const chart = {
+                data: [
+                    {
+                        type: 'candlestick',
+                        x: dates,
+                        open: open,
+                        high: high,
+                        low: low,
+                        close: close,
+                        name: 'Prediction Data',
+                        increasing_line_color: '#26A69A',
+                        decreasing_line_color: '#EF5350'
+                    }
+                ],
+                layout: {
+                    title: 'Prediction Chart',
+                    xaxis_title: 'Time',
+                    yaxis_title: 'Price',
+                    template: 'plotly_white',
+                    height: 600,
+                    showlegend: true,
+                    xaxis: {
+                        rangeslider_visible: false,
+                        type: 'date'
+                    }
+                }
+            };
+            
+            return chart;
+        }
+
+        // Display prediction data table
+        let currentPredictionData = null;
+
+        function displayPredictionTable(predictions) {
+            currentPredictionData = predictions;
+            const section = document.getElementById('prediction-table-section');
+            const tbody = document.getElementById('prediction-table-body');
+
+            section.style.display = 'block';
+            tbody.innerHTML = '';
+
+            if (!predictions || predictions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8">No prediction data</td></tr>';
+                return;
+            }
+
+            predictions.forEach((pred, index) => {
+                const row = document.createElement('tr');
+
+                // Calculate change percentage
+                let changePercent = 0;
+                let changeClass = 'neutral';
+                if (index === 0) {
+                    changePercent = 0;
+                } else {
+                    const prevClose = predictions[index - 1].close;
+                    changePercent = ((pred.close - prevClose) / prevClose) * 100;
+                    changeClass = changePercent > 0 ? 'positive' : (changePercent < 0 ? 'negative' : 'neutral');
+                }
+
+                // Format date
+                const date = new Date(pred.timestamp);
+                const dateStr = date.toLocaleDateString('zh-CN') + ' ' + date.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'});
+
+                // Format volume (K = thousand, M = million, B = billion)
+                const formatVolume = (vol) => {
+                    if (vol >= 1e9) return (vol / 1e9).toFixed(2) + 'B';
+                    if (vol >= 1e6) return (vol / 1e6).toFixed(2) + 'M';
+                    if (vol >= 1e3) return (vol / 1e3).toFixed(2) + 'K';
+                    return vol.toFixed(0);
+                };
+
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${dateStr}</td>
+                    <td>${pred.open.toFixed(4)}</td>
+                    <td>${pred.high.toFixed(4)}</td>
+                    <td>${pred.low.toFixed(4)}</td>
+                    <td>${pred.close.toFixed(4)}</td>
+                    <td>${formatVolume(pred.volume || 0)}</td>
+                    <td class="${changeClass}">${index === 0 ? '-' : (changePercent > 0 ? '+' : '') + changePercent.toFixed(2) + '%'}</td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        }
+
+        // Export to CSV
+        function exportToCSV() {
+            if (!currentPredictionData || currentPredictionData.length === 0) {
+                alert('No prediction data to export');
+                return;
+            }
+
+            const headers = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'Amount', 'Change (%)'];
+            const rows = [headers];
+
+            currentPredictionData.forEach((pred, index) => {
+                const date = new Date(pred.timestamp).toISOString().slice(0, 19).replace('T', ' ');
+
+                let changePercent = 0;
+                if (index > 0) {
+                    const prevClose = currentPredictionData[index - 1].close;
+                    changePercent = ((pred.close - prevClose) / prevClose) * 100;
+                }
+
+                rows.push([
+                    date,
+                    pred.open.toFixed(4),
+                    pred.high.toFixed(4),
+                    pred.low.toFixed(4),
+                    pred.close.toFixed(4),
+                    pred.volume || 0,
+                    pred.amount || 0,
+                    index === 0 ? '0' : changePercent.toFixed(2)
+                ]);
+            });
+
+            const csvContent = rows.map(row => row.join(',')).join('\n');
+            const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+
+            link.setAttribute('href', url);
+            link.setAttribute('download', `kronos_prediction_${new Date().getTime()}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Export to Excel (simple HTML table format)
+        function exportToExcel() {
+            if (!currentPredictionData || currentPredictionData.length === 0) {
+                alert('No prediction data to export');
+                return;
+            }
+
+            const table = document.querySelector('.prediction-table').cloneNode(true);
+
+            // Remove change column styling for export
+            const rows = table.querySelectorAll('tbody tr');
+            rows.forEach(row => {
+                const cells = row.querySelectorAll('td');
+                cells.forEach(cell => {
+                    cell.className = '';
+                });
+            });
+
+            const html = `
+                <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+                <head>
+                    <meta charset="utf-8">
+                    <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
+                    <x:Name>Prediction</x:Name>
+                    <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>
+                    </x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
+                </head>
+                <body>
+                    <table>${table.innerHTML}</table>
+                </body>
+                </html>
+            `;
+
+            const blob = new Blob([html], { type: 'application/vnd.ms-excel' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+
+            link.setAttribute('href', url);
+            link.setAttribute('download', `kronos_prediction_${new Date().getTime()}.xls`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         }
 
         // Display comparison analysis
@@ -1190,25 +1924,54 @@
         function setupEventListeners() {
             // Load model button
             document.getElementById('load-model-btn').addEventListener('click', loadModel);
-            
+
+            // Data source selection change
+            document.getElementById('data-source-select').addEventListener('change', function() {
+                const dataSource = this.value;
+                const fileContainer = document.getElementById('file-input-container');
+                const stockContainer = document.getElementById('stock-input-container');
+
+                if (dataSource === 'file') {
+                    fileContainer.style.display = 'block';
+                    stockContainer.style.display = 'none';
+                } else if (dataSource === 'stock') {
+                    fileContainer.style.display = 'none';
+                    stockContainer.style.display = 'block';
+                }
+            });
+
             // Load data button
             document.getElementById('load-data-btn').addEventListener('click', loadData);
-            
+
             // Prediction button
             document.getElementById('predict-btn').addEventListener('click', startPrediction);
-            
+
+            // Price limits checkbox
+            document.getElementById('apply-price-limits').addEventListener('change', function() {
+                const limitRateContainer = document.getElementById('limit-rate-container');
+                if (this.checked) {
+                    limitRateContainer.style.display = 'block';
+                } else {
+                    limitRateContainer.style.display = 'none';
+                }
+            });
+
             // Prediction quality parameter sliders
             document.getElementById('temperature').addEventListener('input', function() {
                 document.getElementById('temperature-value').textContent = this.value;
             });
-            
+
             document.getElementById('top-p').addEventListener('input', function() {
                 document.getElementById('top-p-value').textContent = this.value;
             });
-            
+
             // Update slider when lookback window size changes
             document.getElementById('lookback').addEventListener('input', updateSliderFromInputs);
             document.getElementById('pred-len').addEventListener('input', updateSliderFromInputs);
+
+            // Export buttons
+            document.getElementById('export-csv-btn').addEventListener('click', exportToCSV);
+            document.getElementById('export-excel-btn').addEventListener('click', exportToExcel);
         }
 
         // Display status information
