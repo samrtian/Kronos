@@ -5,7 +5,9 @@
       "Bash(python:*)",
       "Bash(netstat:*)",
       "Bash(findstr:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(python -c:*)",
+      "Bash(python run.py:*)"
     ],
     "deny": [],
     "ask": []

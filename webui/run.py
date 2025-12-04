@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Kronos Web UI startup script
 """
@@ -9,6 +10,12 @@ import subprocess
 import webbrowser
 import time
 import socket
+
+# Fix Windows console encoding issue
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 
 
